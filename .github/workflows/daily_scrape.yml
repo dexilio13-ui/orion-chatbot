@@ -2,31 +2,33 @@ name: Daily Orion Scrape
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Pokreće se svake noći u ponoć
-  workflow_dispatch: # Omogućava ti da pokreneš ručno kad god želiš
+    - cron: '0 3 * * *' # Pokreće se svako veče u 3 ujutru
+  workflow_dispatch: # Omogućava ti da pokreneš ručno iz GitHub-a za test
 
 jobs:
-  build:
+  scrape-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+    - name: Checkout kod
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.9'
+    - name: Podešavanje Pythona
+      uses: actions/setup-python@v4
+      with:
+        python-node: '3.10'
 
-      - name: Install dependencies
-        run: |
-          pip install requests beautifulsoup4
+    - name: Instalacija biblioteka
+      run: |
+        pip install requests beautifulsoup4
 
-      - name: Run scraper
-        run: python scraper_cene.py
+    - name: Pokretanje skrepovanja
+      run: |
+        python scraper_cene.py
 
-      - name: Commit and push if changed
-        run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
-          git add komponente.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Automatsko osvežavanje cena" && git push)
+    # KLJUČNI KORAK KOJI TI NEDOSTAJE:
+    - name: Guranje fajla na Hugging Face Space
+      uses: huggingface/hf-action@v1
+      with:
+        git-remote-url: https://huggingface.co/spaces/dexilio/orion-chatbot
+        token: ${{ secrets.HF_TOKEN }}
+        title: "Automatsko osvežavanje cena komponente.json"
