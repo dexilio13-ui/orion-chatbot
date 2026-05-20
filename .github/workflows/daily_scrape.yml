@@ -2,8 +2,8 @@ name: Daily Orion Scrape
 
 on:
   schedule:
-    - cron: '0 3 * * *' # Pokreće se svako veče u 3 ujutru
-  workflow_dispatch: # Omogućava ti da pokreneš ručno iz GitHub-a za test
+    - cron: '0 3 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape-and-push:
@@ -15,7 +15,7 @@ jobs:
     - name: Podešavanje Pythona
       uses: actions/setup-python@v4
       with:
-        python-node: '3.10'
+        python-version: '3.10'   # ✅ FIX #1
 
     - name: Instalacija biblioteka
       run: |
@@ -25,10 +25,18 @@ jobs:
       run: |
         python scraper_cene.py
 
-    # KLJUČNI KORAK KOJI TI NEDOSTAJE:
-    - name: Guranje fajla na Hugging Face Space
-      uses: huggingface/hf-action@v1
-      with:
-        git-remote-url: https://huggingface.co/spaces/dexilio/orion-chatbot
-        token: ${{ secrets.HF_TOKEN }}
-        title: "Automatsko osvežavanje cena komponente.json"
+    - name: Podešavanje Git LFS   # ✅ FIX #3
+      run: git lfs install
+
+    - name: Guranje fajla na Hugging Face Space   # ✅ FIX #2
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        git config --global user.email "action@github.com"
+        git config --global user.name "GitHub Action"
+        git clone https://user:$HF_TOKEN@huggingface.co/spaces/dexilio/orion-chatbot hf_space
+        cp komponente.json hf_space/komponente.json
+        cd hf_space
+        git add komponente.json
+        git commit -m "Auto update cena $(date '+%Y-%m-%d')" || echo "Nema promena"
+        git push
