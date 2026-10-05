@@ -1,10 +1,11 @@
-name: Daily Orion Scrape
+name: Orion Scrape
 
 on:
   schedule:
-    # 03:10 UTC (~04:10 CET / 05:10 CEST). Nije tacno 03:00 jer GitHub u
-    # vršnim satima odgađa job-ove koji se pokreću tačno na puni sat.
-    - cron: '10 3 * * *'
+    # Svakog 3. dana u 03:10 UTC (~04:10 CET / 05:10 CEST).
+    # Nije tacno 03:00 jer GitHub u vršnim satima odgađa job-ove
+    # koji se pokreću tačno na puni sat.
+    - cron: '10 3 */3 * *'
   workflow_dispatch:
 
 # Ako se dva pokretanja preklope (npr. schedule + rucni dispatch), novi
@@ -14,8 +15,10 @@ concurrency:
   group: orion-scrape
   cancel-in-progress: false
 
+# Potrebno da poslednji korak moze da commituje last_run.json u OVOM repou
+# (dracice ga GITHUB_TOKEN, ne HF_TOKEN).
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   scrape-and-push:
@@ -34,6 +37,11 @@ jobs:
     - name: Instalacija biblioteka
       run: |
         pip install requests beautifulsoup4
+
+    - name: Podešavanje Git identiteta
+      run: |
+        git config --global user.email "action@github.com"
+        git config --global user.name "GitHub Action"
 
     - name: Pokretanje skrepovanja
       run: |
@@ -54,6 +62,45 @@ jobs:
         print('OK: %d artikala, %d kategorija, %d bez cene' % (len(d), kat, len(bez)))
         EOF
 
+    # BEZ OVOG KORAKA WORKFLOW UMIRE POSLE 60 DANA.
+    # GitHub tiho gasi scheduled workflow ako u repou nema commita 60 dana.
+    # Push na HuggingFace se NE racuna kao aktivnost u ovom repou -- zato je
+    # raspored vec jednom ugasen (poslednji commit 2026-05-20, poslednji
+    # schedule run 2026-07-20, pa sve do rucnog dispatcha 2026-10-04).
+    # last_run.json se menja pri SVAKOM uspesnom run-u, pa je repou uvek
+    # sveoz commit => schedule nikad ne pada. Fajl je mali i ne utice na bot.
+    - name: Belezenje poslednjeg run-a u repou (drzi schedule zivim)
+      run: |
+        python - <<'EOF'
+        import json, datetime
+        d = json.load(open('komponente.json', encoding='utf-8'))
+        bez = [x for x in d if x['cena_rsd'] is None]
+        json.dump({
+            'poslednji_run_utc': datetime.datetime.now(datetime.timezone.utc)
+                                    .strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'artikala': len(d),
+            'kategorija': len({x['kategorija'] for x in d}),
+            'bez_cene': len(bez),
+        }, open('last_run.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+        print(open('last_run.json', encoding='utf-8').read())
+        EOF
+        git add last_run.json
+        if git diff --cached --quiet; then
+          echo "last_run.json nepromenjen (ne bi smelo da se desi)."
+          exit 0
+        fi
+        git commit -m "Belezi poslednji scrape $(date -u +%Y-%m-%d)"
+        for attempt in 1 2 3; do
+          if git push; then
+            echo "Push uspeo (pokusaj $attempt)."
+            exit 0
+          fi
+          echo "Push neuspeo (pokusaj $attempt), pauziram 10s..."
+          sleep 10
+        done
+        echo "Push last_run.json nije uspeo ni posle 3 pokusaja."
+        exit 1
+
     - name: Podešavanje Git LFS
       run: git lfs install
 
@@ -61,8 +108,6 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        git config --global user.email "action@github.com"
-        git config --global user.name "GitHub Action"
         git clone https://user:$HF_TOKEN@huggingface.co/spaces/dexilio/orion-chatbot hf_space
         cp komponente.json hf_space/komponente.json
         cd hf_space
@@ -85,9 +130,11 @@ jobs:
         exit 1
 
 # ─────────────────────────────────────────────────────────────────────
-# VAZNO: GitHub automatski gasi scheduled workflow posle 60 dana bez
-# aktivnosti u repou. Push na HuggingFace se NE racuna kao aktivnost.
-# Zato vlasnik povremeno pokrece ovaj workflow rucno (workflow_dispatch)
-# ili ga preusmeri na spoljni cron koji svakih 40 dana zove dispatch.
-# Dok god je bilo commita u repou, schedule radi normalno.
+# RASPORED: svakog 3. dana (cron '10 3 */3 * *'). Cene na konfiguratoru
+# se menjaju retko, pa dnevni scrape nije potreban. Za proveru odmah
+# koristiti workflow_dispatch (rucno pokretanje iz taba Actions).
+#
+# ZIVOTNI VIJEK: korak "Belezenje poslednjeg run-a u repou" commituje
+# last_run.json pri svakom uspesnom run-u. To drzi repou aktivnim i
+# sprecava da GitHub ugasi ovaj schedule posle 60 dana tisine.
 # ─────────────────────────────────────────────────────────────────────
