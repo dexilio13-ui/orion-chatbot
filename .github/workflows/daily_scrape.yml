@@ -2,12 +2,26 @@ name: Daily Orion Scrape
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    # 03:10 UTC (~04:10 CET / 05:10 CEST). Nije tacno 03:00 jer GitHub u
+    # vršnim satima odgađa job-ove koji se pokreću tačno na puni sat.
+    - cron: '10 3 * * *'
   workflow_dispatch:
+
+# Ako se dva pokretanja preklope (npr. schedule + rucni dispatch), novi
+# CEKA da stari zavrsi umesto da ga prekine -- prekidanje na pola scrape-a
+# bacalo bi nizove promena i završilo bez upisanog fajla.
+concurrency:
+  group: orion-scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   scrape-and-push:
     runs-on: ubuntu-latest
+    # Ceo scrape je ~650 artikala po ~2.5 s, realno 25-35 minuta.
+    timeout-minutes: 60
     steps:
     - name: Checkout kod
       uses: actions/checkout@v4
@@ -25,6 +39,21 @@ jobs:
       run: |
         python scraper_cene.py
 
+    # scraper_cene.py sam izlazi sa kodom 1 ako ne sme da upise fajl
+    # (premalo artikala, previse null cena). Ovaj korak je druga sigurnosna mreza
+    # u slucaju da neko promeni podrazumevanu logiku u samom skraperu.
+    - name: Provera da je fajl ispravan
+      run: |
+        python - <<'EOF'
+        import json
+        d = json.load(open('komponente.json', encoding='utf-8'))
+        bez = [x for x in d if x['cena_rsd'] is None]
+        kat = len({x['kategorija'] for x in d})
+        assert len(d) > 400, 'premalo artikala: %d' % len(d)
+        assert len(bez) <= len(d) * 0.05, 'null cena: %d/%d' % (len(bez), len(d))
+        print('OK: %d artikala, %d kategorija, %d bez cene' % (len(d), kat, len(bez)))
+        EOF
+
     - name: Podešavanje Git LFS
       run: git lfs install
 
@@ -38,5 +67,27 @@ jobs:
         cp komponente.json hf_space/komponente.json
         cd hf_space
         git add komponente.json
-        git commit -m "Auto update cena $(date '+%Y-%m-%d')" || echo "Nema promena"
-        git push
+        if git diff --cached --quiet; then
+          echo "Nema promena u cenama."
+          exit 0
+        fi
+        git commit -m "Auto update cena $(date '+%Y-%m-%d')"
+        # Sajt ponekad odbija push parcijalno, probaj 3 puta sa pauzom.
+        for attempt in 1 2 3; do
+          if git push; then
+            echo "Push uspeo (pokusaj $attempt)."
+            exit 0
+          fi
+          echo "Push neuspeo (pokusaj $attempt), pauziram 10s..."
+          sleep 10
+        done
+        echo "Push nije uspeo ni posle 3 pokusaja."
+        exit 1
+
+# ─────────────────────────────────────────────────────────────────────
+# VAZNO: GitHub automatski gasi scheduled workflow posle 60 dana bez
+# aktivnosti u repou. Push na HuggingFace se NE racuna kao aktivnost.
+# Zato vlasnik povremeno pokrece ovaj workflow rucno (workflow_dispatch)
+# ili ga preusmeri na spoljni cron koji svakih 40 dana zove dispatch.
+# Dok god je bilo commita u repou, schedule radi normalno.
+# ─────────────────────────────────────────────────────────────────────
