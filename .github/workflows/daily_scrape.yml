@@ -67,21 +67,35 @@ jobs:
     # Push na HuggingFace se NE racuna kao aktivnost u ovom repou -- zato je
     # raspored vec jednom ugasen (poslednji commit 2026-05-20, poslednji
     # schedule run 2026-07-20, pa sve do rucnog dispatcha 2026-10-04).
-    # last_run.json se menja pri SVAKOM uspesnom run-u, pa je repou uvek
-    # sveoz commit => schedule nikad ne pada. Fajl je mali i ne utice na bot.
+    # last_run.json se menja pri SVAKOM run-u (čak i neuspešnom), pa je repou
+    # uvek svež commit => schedule nikad ne pada. Fajl je mali i ne utice na bot.
+    #
+    # if: always() JE OBAVEZAN: bez njega se korak preskače kad scrape uspešno
+    # završi sa exit 1 (npr. sajt vrati 0 artikala). Tada bi commita bilo 60 dana
+    # i GitHub bi ugasio raspored — tačno problem koji ovaj korak rešava.
     - name: Belezenje poslednjeg run-a u repou (drzi schedule zivim)
+      if: always()
       run: |
         python - <<'EOF'
-        import json, datetime
-        d = json.load(open('komponente.json', encoding='utf-8'))
-        bez = [x for x in d if x['cena_rsd'] is None]
-        json.dump({
+        import json, datetime, os
+        rec = {
             'poslednji_run_utc': datetime.datetime.now(datetime.timezone.utc)
                                     .strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'artikala': len(d),
-            'kategorija': len({x['kategorija'] for x in d}),
-            'bez_cene': len(bez),
-        }, open('last_run.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+        }
+        # komponente.json je untracked u ovom repou, pa ne postoji ako je scrape
+        # pao pre upisa. Zabeležimo i to — bitno je da commit uvek ide.
+        if os.path.exists('komponente.json'):
+            try:
+                d = json.load(open('komponente.json', encoding='utf-8'))
+                rec['artikala'] = len(d)
+                rec['kategorija'] = len({x['kategorija'] for x in d})
+                rec['bez_cene'] = sum(1 for x in d if x['cena_rsd'] is None)
+            except Exception as e:
+                rec['greska'] = f'{type(e).__name__}: {e}'
+        else:
+            rec['greska'] = 'komponente.json nije generisan (scrape nije uspeo)'
+        with open('last_run.json', 'w', encoding='utf-8') as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
         print(open('last_run.json', encoding='utf-8').read())
         EOF
         git add last_run.json
