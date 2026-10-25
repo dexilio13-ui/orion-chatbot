@@ -1,6 +1,4 @@
 {
-  "poslednji_run_utc": "2026-10-22T09:01:30Z",
-  "artikala": 660,
-  "kategorija": 19,
-  "bez_cene": 0
+  "poslednji_run_utc": "2026-10-25T09:19:09Z",
+  "greska": "komponente.json nije generisan (scrape nije uspeo)"
 }
